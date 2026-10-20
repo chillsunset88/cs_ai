@@ -130,7 +130,7 @@ namespace CS_AI.Controllers
                                 {
                                     try
                                     {
-                                        using var user = _ldapService.GetUser(username);
+                                        var user = _ldapService.GetUser(username);
 
                                         if (user == null)
                                         {
