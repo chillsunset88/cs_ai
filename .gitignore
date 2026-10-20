@@ -1,0 +1,18 @@
+# Konfigurasi berisi rahasia. Salin appsettings.example.json menjadi appsettings.json lalu isi nilainya.
+appsettings.json
+appsettings.Production.json
+appsettings.Local.json
+
+# Hasil build / cache IDE (selalu bisa dibuat ulang)
+bin/
+obj/
+.vs/
+*.user
+
+# Terlalu besar untuk GitHub (batas 100 MB). Lihat docs/README.id.md untuk cara menyediakannya.
+wwwroot/ggml-small.bin
+wwwroot/ffmpeg/
+
+# File audio sementara (dibuat saat runtime)
+wwwroot/tts/
+wwwroot/voices/
