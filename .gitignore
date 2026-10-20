@@ -9,6 +9,16 @@ obj/
 .vs/
 *.user
 
+# Hasil publish (dotnet publish / Visual Studio) dan arsip untuk dikirim ke server.
+# Berisi appsettings.json asli dan model Whisper, jadi jangan sampai ter-commit.
+publish/
+Publish/
+PublishOutput/
+publish-*/
+CS_AI_BE/
+publish*.zip
+CS_AI*.zip
+
 # Terlalu besar untuk GitHub (batas 100 MB). Lihat docs/README.id.md untuk cara menyediakannya.
 wwwroot/ggml-small.bin
 wwwroot/ffmpeg/
