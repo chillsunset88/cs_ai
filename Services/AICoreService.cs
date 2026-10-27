@@ -62,12 +62,42 @@ namespace CS_AI.Services
 
         public async Task<string> SendMessage(string messages)
         {
+            var (_, body) = await PostWhatsAppAsync(_configuration["WhatsApp:Receiver"], messages);
+            return body;
+        }
+
+        // Kirim WhatsApp ke nomor tertentu (format 628xxxxxxxxxx). Mengembalikan false jika konfigurasi kosong atau
+        // pengiriman gagal; isi pesan (mis. OTP) sengaja tidak dicatat di log.
+        public async Task<bool> SendWhatsAppAsync(string receiver, string message)
+        {
+            if (string.IsNullOrWhiteSpace(_configuration["WhatsApp:UserCode"])
+                || string.IsNullOrWhiteSpace(_configuration["WhatsApp:DeviceId"])
+                || string.IsNullOrWhiteSpace(_configuration["WhatsApp:Secret"]))
+            {
+                _logger.LogError("WhatsApp belum dikonfigurasi (WhatsApp:UserCode, WhatsApp:DeviceId, WhatsApp:Secret)");
+                return false;
+            }
+
+            try
+            {
+                var (ok, _) = await PostWhatsAppAsync(receiver, message);
+                return ok;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                _logger.LogError(ex, "WhatsApp send failed");
+                return false;
+            }
+        }
+
+        private async Task<(bool Ok, string Body)> PostWhatsAppAsync(string? receiver, string message)
+        {
             var payload = new
             {
                 user_code = _configuration["WhatsApp:UserCode"],
                 device_id = _configuration["WhatsApp:DeviceId"],
-                receiver = _configuration["WhatsApp:Receiver"],
-                message = messages,
+                receiver,
+                message,
                 secret = _configuration["WhatsApp:Secret"],
                 //enableTypingEffect = false
             };
@@ -78,11 +108,29 @@ namespace CS_AI.Services
             var client = _httpClientFactory.CreateClient();
             using var response = await client.PostAsync("https://api.kirimi.id/v1/send-message", content);
             var responseBody = await response.Content.ReadAsStringAsync();
-            if (!response.IsSuccessStatusCode)
+
+            var ok = response.IsSuccessStatusCode && !ReportsFailure(responseBody);
+            if (!ok)
             {
                 _logger.LogError("WhatsApp send failed with {StatusCode}: {Body}", (int)response.StatusCode, responseBody);
             }
-            return responseBody;
+            return (ok, responseBody);
+        }
+
+        // Sebagian gateway membalas HTTP 200 dengan {"success": false}; anggap itu gagal.
+        private static bool ReportsFailure(string body)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                return doc.RootElement.ValueKind == JsonValueKind.Object
+                    && doc.RootElement.TryGetProperty("success", out var success)
+                    && success.ValueKind == JsonValueKind.False;
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
         }
 
         //public async Task<string> GenerateResponse(string prompt, string sessionId, string? imagePath = null)

@@ -6,7 +6,16 @@ using Microsoft.AspNetCore.Hosting;
 namespace CS_AI.Services
 {
     /// <summary>Hasil pencarian user di AD.</summary>
-    public sealed record LdapUser(string? SamAccountName, string? DisplayName, string DistinguishedName);
+    public sealed record LdapUser(string? SamAccountName, string? DisplayName, string DistinguishedName, string? Phone = null);
+
+    /// <summary>Hasil membandingkan nomor telepon yang dibagikan user dengan nomor di AD.</summary>
+    public enum PhoneCheck
+    {
+        Match,
+        Mismatch,
+        NoPhoneOnRecord,
+        UserNotFound
+    }
 
     /// <summary>
     /// Akses Active Directory lewat LDAP/LDAPS (System.DirectoryServices.Protocols), jadi jalan di Windows maupun Linux.
@@ -23,6 +32,7 @@ namespace CS_AI.Services
         private readonly string? _password;
         private readonly string? _bindDomain;
         private readonly string? _configuredBaseDn;
+        private readonly string _phoneAttribute;
         private readonly int _port;
         private readonly bool _useSsl;
 
@@ -38,6 +48,7 @@ namespace CS_AI.Services
             _password = configuration["Ldap:Password"];
             _bindDomain = configuration["Ldap:BindDomain"];
             _configuredBaseDn = configuration["Ldap:BaseDn"];
+            _phoneAttribute = string.IsNullOrWhiteSpace(configuration["Ldap:PhoneAttribute"]) ? "mobile" : configuration["Ldap:PhoneAttribute"]!;
             _useSsl = configuration.GetValue<bool?>("Ldap:UseSsl") ?? true;
             _port = configuration.GetValue<int?>("Ldap:Port") ?? (_useSsl ? 636 : 389);
         }
@@ -139,7 +150,7 @@ namespace CS_AI.Services
                 ResolveBaseDn(connection),
                 filter,
                 SearchScope.Subtree,
-                "sAMAccountName", "displayName", "distinguishedName");
+                "sAMAccountName", "displayName", "distinguishedName", _phoneAttribute);
 
             var response = (SearchResponse)connection.SendRequest(request);
             if (response.Entries.Count == 0)
@@ -149,7 +160,8 @@ namespace CS_AI.Services
             return new LdapUser(
                 ReadAttribute(entry, "sAMAccountName"),
                 ReadAttribute(entry, "displayName"),
-                entry.DistinguishedName);
+                entry.DistinguishedName,
+                ReadAttribute(entry, _phoneAttribute));
         }
 
         private static string? ReadAttribute(SearchResultEntry entry, string name) =>
@@ -165,6 +177,28 @@ namespace CS_AI.Services
             }
 
             return GetUser(username) != null;
+        }
+
+        // Membandingkan nomor yang dibagikan user (sudah dinormalkan) dengan atribut telepon akun di AD
+        // (Ldap:PhoneAttribute, default "mobile"). Di Development hanya akun dummy yang dianggap cocok.
+        public PhoneCheck CheckPhone(string username, string normalizedPhone, string defaultCountryCode = "62")
+        {
+            if (_environment.IsDevelopment())
+            {
+                return string.Equals(username, TelegramDummyUsername, StringComparison.OrdinalIgnoreCase)
+                    ? PhoneCheck.Match
+                    : PhoneCheck.UserNotFound;
+            }
+
+            var user = GetUser(username);
+            if (user == null)
+                return PhoneCheck.UserNotFound;
+
+            var adPhone = PhoneNumberHelper.Normalize(user.Phone, defaultCountryCode);
+            if (adPhone == null)
+                return PhoneCheck.NoPhoneOnRecord;
+
+            return string.Equals(adPhone, normalizedPhone, StringComparison.Ordinal) ? PhoneCheck.Match : PhoneCheck.Mismatch;
         }
 
         public LdapUser? GetUser(string username)

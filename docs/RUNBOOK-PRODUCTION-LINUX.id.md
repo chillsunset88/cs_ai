@@ -5,8 +5,9 @@ Menggantikan runbook lama berbasis Windows/RDC (`RUNBOOK-PRODUCTION-RDC.id.md`, 
 Untuk tes tanpa AD (hanya akun dummy `telegram.demo`), setel `ASPNETCORE_ENVIRONMENT=Development`.
 
 > **Peringatan.** Tes dengan username asli mereset password AD sungguhan. Pakai akun uji milik sendiri.
-> OTP dikirim ke chat yang sama dengan yang meminta reset, jadi siapa pun yang bisa chat ke bot dan tahu sebuah
-> username bisa mereset akun itu. Batasi akses ke bot selama tes.
+> OTP dikirim ke **WhatsApp** pada nomor yang dibagikan user lewat tombol kontak Telegram (bukan ke chat Telegram).
+> Nomor itu hanya membuktikan pemilik akun Telegram tersebut. Agar terikat ke pemilik akun AD, nomor dicocokkan dengan
+> atribut telepon akun di AD (`PasswordReset:RequireAdPhoneMatch`, default `true`, lihat bagian 4a).
 
 ## 0. Akses Active Directory dari Linux (LDAPS)
 
@@ -129,6 +130,10 @@ Ldap__Server=<FQDN domain controller, mis. dc01.corp.local>
 Ldap__Username=<akun layanan, mis. svc@corp.local>
 Ldap__Password=<password akun layanan>
 # Opsional: Ldap__Port=636  Ldap__UseSsl=true  Ldap__BindDomain=CORP  Ldap__BaseDn=OU=Karyawan,DC=corp,DC=local
+# Pengiriman OTP lewat WhatsApp (kirimi.id) -- WAJIB agar OTP terkirim:
+WhatsApp__UserCode=<user code kirimi>
+WhatsApp__DeviceId=<device id kirimi>
+WhatsApp__Secret=<secret kirimi>
 LLM__ApiKey=<...>
 Gemini__ApiKey=<...>
 # PasswordReset__BaseUrl=http://localhost:5000
@@ -138,6 +143,24 @@ sudo chown root:csai /etc/cs-ai/cs-ai.env && sudo chmod 640 /etc/cs-ai/cs-ai.env
 
 Untuk opsi C, ubah baris pertama menjadi `ASPNETCORE_ENVIRONMENT=Development`.
 Kunci lain (WhatsApp, `Telegram__MaxConcurrentUpdates`, dst.) mengikuti `appsettings.example.json`.
+
+### 4a. OTP lewat WhatsApp dan pencocokan nomor di AD
+
+Alur: user mengirim username → bot menampilkan tombol **Bagikan nomor saya** → user menekannya → bot mengirim OTP ke
+WhatsApp pada nomor itu → user membalas OTP di Telegram → bot mengirim link reset.
+
+- Nomor diterima hanya jika kontak itu milik akun Telegram yang sedang chat (`Contact.UserId == From.Id`).
+- Nomor dinormalkan ke format `628xxxxxxxxxx` (`0812…`, `+62 812…`, `6281…` dianggap sama). Kode negara bawaan `62`
+  (`PasswordReset__DefaultCountryCode`).
+- **`PasswordReset__RequireAdPhoneMatch=true` (default):** nomor harus sama dengan atribut telepon akun di AD
+  (`Ldap__PhoneAttribute`, default `mobile`). Tanpa ini, siapa pun yang tahu sebuah username bisa memakai nomornya
+  sendiri untuk mereset akun itu. Jika atribut di AD kosong atau berbeda, reset ditolak dengan pesan umum; alasan
+  sebenarnya hanya ada di log (`Verifikasi nomor gagal ... NoPhoneOnRecord/Mismatch`).
+- Untuk tes dengan akun yang atribut teleponnya belum diisi, sementara setel `PasswordReset__RequireAdPhoneMatch=false`.
+  Itu melepas pengikatan ke AD, jadi jangan dibiarkan untuk pemakaian sebenarnya.
+- Di mode `Development`, hanya akun dummy `telegram.demo` yang dianggap cocok; OTP tetap dikirim ke nomor yang dibagikan.
+- Format penerima WhatsApp yang dipakai adalah nomor dengan kode negara (`628…`). Konfigurasi lama `WhatsApp__Receiver`
+  (ID `@lid`) hanya dipakai untuk notifikasi admin, bukan OTP. Belum diuji terhadap gateway kirimi.id sungguhan.
 
 ## 5. Jalankan
 
@@ -188,18 +211,24 @@ Dengan akun uji (opsi C: `telegram.demo`):
 
 1. `/start` dan `/time` dijawab bot.
 2. Kirim teks "ganti password saya" → bot meminta username.
-3. Kirim username → bot mengirim OTP 6 digit sebagai teks.
-4. Balas OTP → bot mengirim link `.../account/resetpassword?token=...`.
-5. Buka link lewat **SSH tunnel** dari laptop:
+3. Kirim username → bot menampilkan tombol **Bagikan nomor saya**.
+4. Tekan tombol itu → OTP 6 digit datang di **WhatsApp** pada nomor tersebut (bukan di Telegram).
+5. Balas OTP di Telegram → bot mengirim link `.../account/resetpassword?token=...`.
+6. Buka link lewat **SSH tunnel** dari laptop:
    ```bash
    ssh -L 5000:localhost:5000 user@server
    ```
    lalu buka link tadi di browser laptop (host `localhost:5000` sudah cocok).
-6. Isi password baru yang memenuhi kebijakan AD, kirim, dan pastikan halaman sukses muncul. Login dengan password baru.
-7. Buka link yang sama lagi → harus muncul "tidak valid atau kedaluwarsa".
-8. Ulangi dengan **voice note** ("tolong ganti password saya"). OTP dan link tetap datang sebagai teks.
-9. Uji negatif: username yang tidak ada → bot minta kirim ulang; OTP salah 3 kali → OTP hangus.
-10. Billing (nomor yang ada di `database.txt`) dan laporan jalan rusak masih jalan.
+7. Isi password baru yang memenuhi kebijakan AD, kirim, dan pastikan halaman sukses muncul. Login dengan password baru.
+8. Buka link yang sama lagi → harus muncul "tidak valid atau kedaluwarsa".
+9. Ulangi dengan **voice note** ("tolong ganti password saya"). Tombol kontak tetap muncul sebagai teks, OTP datang di WhatsApp, dan link tetap dikirim sebagai teks.
+10. Uji negatif:
+    - username yang tidak ada → bot minta kirim ulang;
+    - membagikan kontak **orang lain** (teruskan kontak) → ditolak, tidak ada WhatsApp terkirim;
+    - nomor yang berbeda dari nomor di AD (saat `RequireAdPhoneMatch=true`) → "tidak dapat diverifikasi", tidak ada WhatsApp;
+    - mengetik teks saat tombol kontak diminta → bot mengingatkan, tidak dilempar ke LLM;
+    - OTP salah 3 kali → OTP hangus.
+11. Billing (nomor yang ada di `database.txt`) dan laporan jalan rusak masih jalan.
 
 ## 7. Selesai tes
 

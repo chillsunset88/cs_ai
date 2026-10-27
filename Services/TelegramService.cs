@@ -9,6 +9,7 @@ using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
+using Telegram.Bot.Types.ReplyMarkups;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace CS_AI.Services
@@ -27,6 +28,8 @@ namespace CS_AI.Services
         private readonly TTSService _tts;
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ConcurrentDictionary<long, PasswordResetState> _passwordResets = new();
+        // Chat yang sudah memberi username dan sedang diminta membagikan nomornya lewat tombol kontak.
+        private readonly ConcurrentDictionary<long, ContactRequestState> _awaitingContact = new();
         private readonly Dictionary<long, ChatQueue> _chatQueues = new();
         private readonly SemaphoreSlim _updateConcurrency;
         private readonly PasswordResetTokenService _resetTokens;
@@ -109,7 +112,7 @@ namespace CS_AI.Services
                                         "   message=\"Username tidak ditemukan. Mohon kirim ulang username Anda.\"\r\n" +
                                         "4. Jika menerima system=otp_sent:\r\n" +
                                         "   action=\"ask_otp\"\r\n" +
-                                        "   message=\"Kode OTP sudah kami kirim. Silakan balas dengan kode OTP tersebut.\"\r\n" +
+                                        "   message=\"Kode OTP sudah kami kirim ke WhatsApp Anda. Silakan balas dengan kode OTP tersebut.\"\r\n" +
                                         "5. Jika menerima system=otp_invalid:\r\n" +
                                         "   action=\"ask_otp\"\r\n" +
                                         "   message=\"Kode OTP tidak valid. Silakan kirim ulang kode OTP Anda.\"\r\n" +
@@ -280,10 +283,15 @@ namespace CS_AI.Services
 
             var chatId = message.Chat.Id;
             var text = message.Text;
-            var phoneNumber = message.Contact?.PhoneNumber;
 
             //if (string.IsNullOrEmpty(text))
             //    return;
+
+            if (message.Contact != null)
+            {
+                await HandleContactAsync(botClient, message, cancellationToken);
+                return;
+            }
 
             if (message.Voice != null)
             {
@@ -310,6 +318,7 @@ namespace CS_AI.Services
                 case "/reset":
                     _aiService.ClearSession(chatId.ToString());
                     _passwordResets.TryRemove(chatId, out _);
+                    _awaitingContact.TryRemove(chatId, out _);
                     break;
 
                 default:
@@ -564,6 +573,14 @@ namespace CS_AI.Services
             try
             {
                 var input = text.Trim();
+                if (TryGetAwaitingContact(chatId, out _))
+                {
+                    await SendContactRequestAsync(botClient, chatId,
+                        "Untuk melanjutkan, tekan tombol \"Bagikan nomor saya\" di bawah. Ketik /reset untuk membatalkan.",
+                        cancellationToken);
+                    return;
+                }
+
                 // Dari suara, OTP bisa terbaca "123 456" atau "kode saya 123456."; ambil digitnya saja.
                 var otpCandidate = viaVoice ? Regex.Replace(input, @"\D", "") : input;
                 if (_passwordResets.TryGetValue(chatId, out var pending) && Regex.IsMatch(otpCandidate, @"^\d{6}$"))
@@ -626,10 +643,136 @@ namespace CS_AI.Services
                 return;
             }
 
-            var otp = GenerateOTP();
-            _passwordResets[chatId] = new PasswordResetState(username, otp, DateTime.UtcNow.AddMinutes(5));
-            await botClient.SendMessage(chatId, $"Kode OTP Anda: {otp}\nBerlaku 5 menit.", cancellationToken: cancellationToken);
-            await ContinuePasswordFlowAsync(botClient, chatId, "system=otp_sent", cancellationToken, viaVoice);
+            PruneContactRequests();
+            _awaitingContact[chatId] = new ContactRequestState(username, DateTime.UtcNow.AddMinutes(5));
+            await SendContactRequestAsync(botClient, chatId,
+                "Untuk verifikasi, tekan tombol \"Bagikan nomor saya\" di bawah. Kode OTP akan dikirim ke WhatsApp pada nomor tersebut.",
+                cancellationToken);
+        }
+
+        private bool TryGetAwaitingContact(long chatId, out ContactRequestState request)
+        {
+            if (_awaitingContact.TryGetValue(chatId, out request!))
+            {
+                if (request.ExpiresAt >= DateTime.UtcNow)
+                    return true;
+
+                _awaitingContact.TryRemove(chatId, out _);
+            }
+
+            return false;
+        }
+
+        private void PruneContactRequests()
+        {
+            var now = DateTime.UtcNow;
+            foreach (var (key, request) in _awaitingContact)
+            {
+                if (request.ExpiresAt < now)
+                {
+                    _awaitingContact.TryRemove(key, out _);
+                }
+            }
+        }
+
+        private static Task SendContactRequestAsync(ITelegramBotClient botClient, long chatId, string text, CancellationToken cancellationToken)
+        {
+            var keyboard = new ReplyKeyboardMarkup(KeyboardButton.WithRequestContact("Bagikan nomor saya"))
+            {
+                ResizeKeyboard = true,
+                OneTimeKeyboard = true
+            };
+
+            return botClient.SendMessage(chatId, text, replyMarkup: keyboard, cancellationToken: cancellationToken);
+        }
+
+        // Nomor dari tombol kontak adalah nomor akun Telegram yang sudah diverifikasi Telegram. Syarat sah:
+        // kontak itu milik pengirim sendiri (kontak orang lain bisa diteruskan), dan (bila diaktifkan) nomornya
+        // sama dengan atribut telepon akun di AD. OTP lalu dikirim ke WhatsApp pada nomor tersebut.
+        private async Task HandleContactAsync(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
+        {
+            var chatId = message.Chat.Id;
+            var contact = message.Contact!;
+
+            try
+            {
+                if (!TryGetAwaitingContact(chatId, out var request))
+                {
+                    await botClient.SendMessage(chatId,
+                        "Permintaan verifikasi tidak ditemukan atau sudah kedaluwarsa. Silakan mulai lagi dengan meminta ganti password.",
+                        replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
+                    return;
+                }
+
+                var countryCode = _configuration["PasswordReset:DefaultCountryCode"] ?? "62";
+                var phone = PhoneNumberHelper.Normalize(contact.PhoneNumber, countryCode);
+                var isOwnContact = message.From != null && contact.UserId == message.From.Id;
+
+                if (!isOwnContact || phone == null)
+                {
+                    request.Attempts++;
+                    if (request.Attempts >= 3)
+                    {
+                        _awaitingContact.TryRemove(chatId, out _);
+                        _aiService.ClearSession(chatId.ToString());
+                        await botClient.SendMessage(chatId, "Verifikasi dibatalkan karena nomor tidak dapat diterima. Silakan mulai lagi.",
+                            replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
+                        return;
+                    }
+
+                    await SendContactRequestAsync(botClient, chatId,
+                        "Gunakan tombol \"Bagikan nomor saya\" untuk membagikan nomor Anda sendiri, bukan kontak orang lain.",
+                        cancellationToken);
+                    return;
+                }
+
+                // Dipakai sekali: dihapus sebelum proses async supaya tidak bisa dikirim ganda.
+                _awaitingContact.TryRemove(chatId, out _);
+
+                var requireAdMatch = _configuration.GetValue<bool?>("PasswordReset:RequireAdPhoneMatch") ?? true;
+                if (requireAdMatch)
+                {
+                    var check = await Task.Run(() =>
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        return scope.ServiceProvider.GetRequiredService<LDAPService>().CheckPhone(request.Username, phone, countryCode);
+                    }, cancellationToken);
+
+                    if (check != PhoneCheck.Match)
+                    {
+                        // Alasan sebenarnya hanya di log; user menerima pesan yang sama untuk semua kasus.
+                        _logger.LogWarning("Verifikasi nomor gagal untuk {Username} dari chat {ChatId}: {Result} (nomor {Phone})",
+                            request.Username, chatId, check, PhoneNumberHelper.Mask(phone));
+                        _aiService.ClearSession(chatId.ToString());
+                        await botClient.SendMessage(chatId, "Nomor tersebut tidak dapat diverifikasi untuk akun ini. Silakan hubungi tim IT.",
+                            replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
+                        return;
+                    }
+                }
+
+                var otp = GenerateOTP();
+                var sent = await _aiService.SendWhatsAppAsync(phone,
+                    $"Kode OTP reset password Anda: {otp}\nBerlaku 5 menit. Jangan bagikan kode ini kepada siapa pun.");
+
+                if (!sent)
+                {
+                    _aiService.ClearSession(chatId.ToString());
+                    await botClient.SendMessage(chatId,
+                        "Maaf, kode OTP gagal dikirim ke WhatsApp. Pastikan nomor tersebut aktif di WhatsApp, lalu coba lagi.",
+                        replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
+                    return;
+                }
+
+                _passwordResets[chatId] = new PasswordResetState(request.Username, otp, DateTime.UtcNow.AddMinutes(5));
+                _logger.LogInformation("OTP reset password dikirim via WhatsApp ke {Phone} untuk chat {ChatId}", PhoneNumberHelper.Mask(phone), chatId);
+                await ContinuePasswordFlowAsync(botClient, chatId, "system=otp_sent", cancellationToken);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogError(ex, "Failed to handle shared contact for chat {ChatId}", chatId);
+                await botClient.SendMessage(chatId, "Maaf, terjadi kendala saat memproses permintaan Anda. Silakan coba lagi.",
+                    replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
+            }
         }
 
         private async Task VerifyPasswordOtpAsync(ITelegramBotClient botClient, long chatId, PasswordResetState pending, string otp, CancellationToken cancellationToken, bool viaVoice = false)
@@ -773,6 +916,19 @@ namespace CS_AI.Services
         {
             public Task Tail { get; set; } = Task.CompletedTask;
             public int Pending { get; set; }
+        }
+
+        private sealed class ContactRequestState
+        {
+            public ContactRequestState(string username, DateTime expiresAt)
+            {
+                Username = username;
+                ExpiresAt = expiresAt;
+            }
+
+            public string Username { get; }
+            public DateTime ExpiresAt { get; }
+            public int Attempts { get; set; }
         }
 
         private sealed class PasswordResetState
