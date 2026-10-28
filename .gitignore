@@ -2,6 +2,7 @@
 appsettings.json
 appsettings.Production.json
 appsettings.Local.json
+fortinet.txt
 
 # Hasil build / cache IDE (selalu bisa dibuat ulang)
 bin/
@@ -26,3 +27,6 @@ wwwroot/ffmpeg/
 # File audio sementara (dibuat saat runtime)
 wwwroot/tts/
 wwwroot/voices/
+
+# credential/catatan lokal, jangan di-commit
+fortinet.txt
