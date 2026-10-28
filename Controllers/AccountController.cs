@@ -26,19 +26,18 @@ namespace CS_AI.Controllers
         [HttpGet]
         public IActionResult ResetPassword(string? token)
         {
-            // Tanpa token: halaman lama (username diisi manual). Dengan token: link dari bot, username terkunci.
-            if (!string.IsNullOrEmpty(token))
-            {
-                if (!_resetTokens.TryGetUsername(token, out var tokenUser))
-                {
-                    ViewBag.TokenInvalid = true;
-                    return View();
-                }
+            NoStore();
 
-                ViewBag.Token = token;
-                ViewBag.Username = tokenUser;
+            // Halaman hanya bisa dibuka lewat link dari bot; tanpa token yang valid tidak ada form sama sekali.
+            if (string.IsNullOrEmpty(token) || !_resetTokens.TryGetUsername(token, out var tokenUser))
+            {
+                ViewBag.TokenInvalid = true;
+                return View();
             }
 
+            ViewBag.Token = token;
+            ViewBag.Username = tokenUser;
+            ViewBag.Step = _resetTokens.IsVerified(token) ? "password" : "otp";
             return View();
         }
 
@@ -87,52 +86,58 @@ namespace CS_AI.Controllers
         //    return View();
         //}
         [HttpPost]
-        public async Task<IActionResult> ResetPassword(string? Username, string? Password, string? ConfirmPassword, string? Token)
+        public IActionResult VerifyOtp(string? Token, string? Otp)
         {
-            if (!string.IsNullOrEmpty(Token))
+            NoStore();
+
+            if (string.IsNullOrEmpty(Token) || !_resetTokens.TryGetUsername(Token, out var username))
             {
-                return await ResetPasswordWithTokenAsync(Token, Password, ConfirmPassword);
+                ViewBag.TokenInvalid = true;
+                return View("ResetPassword");
             }
 
-            if (string.IsNullOrEmpty(Username) || string.IsNullOrEmpty(Password))
+            ViewBag.Token = Token;
+            ViewBag.Username = username;
+
+            switch (_resetTokens.VerifyOtp(Token, Otp))
             {
-                ViewBag.Message = "All fields are required.";
-                ViewBag.Success = false;
-                return View();
+                case OtpResult.Ok:
+                    ViewBag.Step = "password";
+                    return View("ResetPassword");
+
+                case OtpResult.Invalid:
+                    ViewBag.Message = "Kode OTP salah. Periksa kode di WhatsApp Anda lalu coba lagi.";
+                    break;
+
+                case OtpResult.Locked:
+                    // Terlalu banyak percobaan: sesi dibuang, user harus meminta reset ulang lewat bot.
+                    _resetTokens.Consume(Token);
+                    ViewBag.TokenInvalid = true;
+                    return View("ResetPassword");
+
+                default:
+                    _resetTokens.Consume(Token);
+                    ViewBag.TokenInvalid = true;
+                    return View("ResetPassword");
             }
 
-            if (Password != ConfirmPassword)
-            {
-                ViewBag.Message = "Passwords do not match.";
-                ViewBag.Success = false;
-                return View();
-            }
+            ViewBag.Step = "otp";
+            ViewBag.Success = false;
+            return View("ResetPassword");
+        }
 
-            try
-            {
-                bool success = _ldapService.ResetPassword(Username, Password);
+        [HttpPost]
+        public async Task<IActionResult> ResetPassword(string? Password, string? ConfirmPassword, string? Token)
+        {
+            NoStore();
+            return await ResetPasswordWithTokenAsync(Token ?? string.Empty, Password, ConfirmPassword);
+        }
 
-                if (success)
-                {
-                    ViewBag.Message = "Password has been reset successfully!";
-                    ViewBag.Success = true;
-
-                    await TriggerAINotification(success);
-                    return RedirectToAction("ResetSuccess");
-                }
-                else
-                {
-                    ViewBag.Message = "Failed to reset password. Check username or permissions.";
-                    ViewBag.Success = false;
-                }
-            }
-            catch (Exception ex)
-            {
-                ViewBag.Message = "An error occurred during the reset process.";
-                ViewBag.Success = false;
-            }
-
-            return View();
+        // Token berisi nama user, jadi halaman ini tidak pernah memakai username dari form.
+        private void NoStore()
+        {
+            Response.Headers["Cache-Control"] = "no-store";
+            Response.Headers["Referrer-Policy"] = "no-referrer";
         }
 
         private async Task<IActionResult> ResetPasswordWithTokenAsync(string token, string? password, string? confirmPassword)
@@ -147,16 +152,33 @@ namespace CS_AI.Controllers
             ViewBag.Token = token;
             ViewBag.Username = username;
 
+            if (!_resetTokens.IsVerified(token))
+            {
+                ViewBag.Step = "otp";
+                ViewBag.Message = "Masukkan kode OTP terlebih dahulu.";
+                ViewBag.Success = false;
+                return View();
+            }
+
+            ViewBag.Step = "password";
+
             if (string.IsNullOrEmpty(password))
             {
-                ViewBag.Message = "All fields are required.";
+                ViewBag.Message = "Semua kolom wajib diisi.";
                 ViewBag.Success = false;
                 return View();
             }
 
             if (password != confirmPassword)
             {
-                ViewBag.Message = "Passwords do not match.";
+                ViewBag.Message = "Konfirmasi password tidak sama.";
+                ViewBag.Success = false;
+                return View();
+            }
+
+            if (password.Length < 8)
+            {
+                ViewBag.Message = "Password minimal 8 karakter.";
                 ViewBag.Success = false;
                 return View();
             }
@@ -178,11 +200,11 @@ namespace CS_AI.Controllers
                     return RedirectToAction("ResetSuccess");
                 }
 
-                ViewBag.Message = "Failed to reset password. Check username or permissions.";
+                ViewBag.Message = "Password gagal diubah. Pastikan password memenuhi kebijakan perusahaan (panjang dan kompleksitas), lalu coba lagi.";
             }
             catch (Exception)
             {
-                ViewBag.Message = "An error occurred during the reset process.";
+                ViewBag.Message = "Terjadi kendala saat memproses permintaan. Silakan coba lagi.";
             }
 
             ViewBag.Success = false;

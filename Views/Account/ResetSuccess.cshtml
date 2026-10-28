@@ -1,24 +1,31 @@
 ﻿@{
-    ViewData["Title"] = "Password Reset Successful";
+    Layout = null;
 }
-
-<div class="container d-flex justify-content-center align-items-center vh-100">
-    <div class="card shadow-lg p-5 rounded-4 text-center" style="width: 100%; max-width: 420px;">
-        <div class="mb-4">
-            <div class="display-1 text-success">
-                <i class="bi bi-check-circle-fill"></i>
-            </div>
-        </div>
-
-        <h3 class="fw-bold">All Set!</h3>
-        <p class="text-muted">Your password has been changed successfully. You can now log in to your account with your new password.</p>
-
-        <hr class="my-4 text-muted opacity-25">
-
-        <div class="d-grid">
-            <a asp-action="Login" asp-controller="User" class="btn btn-primary btn-lg rounded-3 shadow-sm">
-                Back to Login
-            </a>
-        </div>
-    </div>
-</div>
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Password Berhasil Diubah</title>
+    <style>
+        :root { --bg: #f3f5f9; --card: #ffffff; --text: #1c2333; --muted: #667085; --line: #d6dbe5; --ok: #15803d; --ok-bg: #dcfce7; }
+        @@media (prefers-color-scheme: dark) {
+            :root { --bg: #0f1420; --card: #181f2e; --text: #e8ecf4; --muted: #98a2b3; --line: #2c3547; --ok: #4ade80; --ok-bg: #12301e; }
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; line-height: 1.5; }
+        .card { width: 100%; max-width: 420px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 36px 24px; text-align: center; box-shadow: 0 8px 30px rgba(16, 24, 40, .08); }
+        .icon { width: 64px; height: 64px; margin: 0 auto 16px; border-radius: 50%; background: var(--ok-bg); color: var(--ok); display: flex; align-items: center; justify-content: center; font-size: 2rem; font-weight: 700; }
+        h1 { margin: 0 0 8px; font-size: 1.4rem; }
+        p { margin: 0; color: var(--muted); }
+    </style>
+</head>
+<body>
+<main class="card">
+    <div class="icon">&#10003;</div>
+    <h1>Password berhasil diubah</h1>
+    <p>Gunakan password baru Anda untuk masuk. Halaman ini boleh ditutup dan Anda dapat kembali ke Telegram.</p>
+</main>
+</body>
+</html>

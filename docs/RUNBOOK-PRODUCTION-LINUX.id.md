@@ -5,9 +5,9 @@ Menggantikan runbook lama berbasis Windows/RDC (`RUNBOOK-PRODUCTION-RDC.id.md`, 
 Untuk tes tanpa AD (hanya akun dummy `telegram.demo`), setel `ASPNETCORE_ENVIRONMENT=Development`.
 
 > **Peringatan.** Tes dengan username asli mereset password AD sungguhan. Pakai akun uji milik sendiri.
-> OTP dikirim ke **WhatsApp** pada nomor yang dibagikan user lewat tombol kontak Telegram (bukan ke chat Telegram).
-> Nomor itu hanya membuktikan pemilik akun Telegram tersebut. Agar terikat ke pemilik akun AD, nomor dicocokkan dengan
-> atribut telepon akun di AD (`PasswordReset:RequireAdPhoneMatch`, default `true`, lihat bagian 4a).
+> OTP dikirim lewat **WhatsApp API Damcorp** ke nomor yang diketik user di Telegram, dan OTP dimasukkan di halaman web
+> reset password (bukan di Telegram). Untuk tahap tes, nomor boleh berbeda dari nomor yang tercatat di AD; backend hanya
+> memeriksa username terdaftar dan format nomor. Lihat bagian 4a.
 
 ## 0. Akses Active Directory dari Linux (LDAPS)
 
@@ -130,10 +130,10 @@ Ldap__Server=<FQDN domain controller, mis. dc01.corp.local>
 Ldap__Username=<akun layanan, mis. svc@corp.local>
 Ldap__Password=<password akun layanan>
 # Opsional: Ldap__Port=636  Ldap__UseSsl=true  Ldap__BindDomain=CORP  Ldap__BaseDn=OU=Karyawan,DC=corp,DC=local
-# Pengiriman OTP lewat WhatsApp (kirimi.id) -- WAJIB agar OTP terkirim:
-WhatsApp__UserCode=<user code kirimi>
-WhatsApp__DeviceId=<device id kirimi>
-WhatsApp__Secret=<secret kirimi>
+# Pengiriman OTP lewat WhatsApp API Damcorp -- WAJIB agar OTP terkirim:
+Damcorp__Username=<username API Damcorp>
+Damcorp__Password=<password API Damcorp>
+# Opsional: Damcorp__BaseUrl=https://waba.damcorp.id  Damcorp__OtpTemplateName=<nama template autentikasi>  Damcorp__TemplateLanguage=id
 LLM__ApiKey=<...>
 Gemini__ApiKey=<...>
 # PasswordReset__BaseUrl=http://localhost:5000
@@ -144,23 +144,25 @@ sudo chown root:csai /etc/cs-ai/cs-ai.env && sudo chmod 640 /etc/cs-ai/cs-ai.env
 Untuk opsi C, ubah baris pertama menjadi `ASPNETCORE_ENVIRONMENT=Development`.
 Kunci lain (WhatsApp, `Telegram__MaxConcurrentUpdates`, dst.) mengikuti `appsettings.example.json`.
 
-### 4a. OTP lewat WhatsApp dan pencocokan nomor di AD
+### 4a. OTP lewat WhatsApp API Damcorp
 
-Alur: user mengirim username → bot menampilkan tombol **Bagikan nomor saya** → user menekannya → bot mengirim OTP ke
-WhatsApp pada nomor itu → user membalas OTP di Telegram → bot mengirim link reset.
+Alur: user mengirim username → backend memeriksa username terdaftar → bot meminta **nomor WhatsApp** (diketik) → backend
+memeriksa format nomor, membuat OTP, mengirimnya lewat Damcorp, lalu bot mengirim **link halaman web** → di halaman itu
+user memasukkan OTP → bila benar, user mengisi password baru dan backend menyimpannya ke AD.
 
-- Nomor diterima hanya jika kontak itu milik akun Telegram yang sedang chat (`Contact.UserId == From.Id`).
-- Nomor dinormalkan ke format `628xxxxxxxxxx` (`0812…`, `+62 812…`, `6281…` dianggap sama). Kode negara bawaan `62`
-  (`PasswordReset__DefaultCountryCode`).
-- **`PasswordReset__RequireAdPhoneMatch=true` (default):** nomor harus sama dengan atribut telepon akun di AD
-  (`Ldap__PhoneAttribute`, default `mobile`). Tanpa ini, siapa pun yang tahu sebuah username bisa memakai nomornya
-  sendiri untuk mereset akun itu. Jika atribut di AD kosong atau berbeda, reset ditolak dengan pesan umum; alasan
-  sebenarnya hanya ada di log (`Verifikasi nomor gagal ... NoPhoneOnRecord/Mismatch`).
-- Untuk tes dengan akun yang atribut teleponnya belum diisi, sementara setel `PasswordReset__RequireAdPhoneMatch=false`.
-  Itu melepas pengikatan ke AD, jadi jangan dibiarkan untuk pemakaian sebenarnya.
-- Di mode `Development`, hanya akun dummy `telegram.demo` yang dianggap cocok; OTP tetap dikirim ke nomor yang dibagikan.
-- Format penerima WhatsApp yang dipakai adalah nomor dengan kode negara (`628…`). Konfigurasi lama `WhatsApp__Receiver`
-  (ID `@lid`) hanya dipakai untuk notifikasi admin, bukan OTP. Belum diuji terhadap gateway kirimi.id sungguhan.
+- Kredensial API (`Damcorp__Username`, `Damcorp__Password`) hanya dibaca dari environment. Aplikasi login ke
+  `POST {BaseUrl}/v2/users/login` (Basic Auth), menyimpan token sampai `expires_after`, dan login ulang otomatis bila
+  token ditolak (401). Pengiriman memakai `POST {BaseUrl}/v2/messages` dengan Bearer token.
+- Nomor dinormalkan ke `628xxxxxxxxxx` (`0812…`, `+62 812…`, `6281…` dianggap sama; kode negara bawaan
+  `PasswordReset__DefaultCountryCode=62`) dan dikirim ke Damcorp sebagai `+628…`.
+- **Pesan teks vs template.** Tanpa `Damcorp__OtpTemplateName`, OTP dikirim sebagai pesan teks biasa. WhatsApp hanya
+  mengantarkan teks bebas ke nomor yang membalas pesan bisnis dalam 24 jam terakhir. Untuk nomor yang belum pernah
+  chat dengan nomor bisnis, minta Damcorp menyetujui **template autentikasi** (OTP sebagai parameter body dan tombol
+  URL), lalu isi `Damcorp__OtpTemplateName` dan `Damcorp__TemplateLanguage`.
+- OTP berlaku `PasswordReset__OtpMinutes` (default 5) dan hanya boleh dicoba 3 kali di halaman web. Link berlaku
+  `PasswordReset__TokenMinutes` (default 10) dan sekali pakai.
+- Di mode `Development`, hanya akun dummy `telegram.demo` yang dianggap terdaftar; OTP tetap dikirim lewat Damcorp.
+- Konfigurasi lama `WhatsApp__*` (kirimi.id) hanya dipakai untuk notifikasi admin, bukan OTP.
 
 ## 5. Jalankan
 
@@ -211,23 +213,23 @@ Dengan akun uji (opsi C: `telegram.demo`):
 
 1. `/start` dan `/time` dijawab bot.
 2. Kirim teks "ganti password saya" → bot meminta username.
-3. Kirim username → bot menampilkan tombol **Bagikan nomor saya**.
-4. Tekan tombol itu → OTP 6 digit datang di **WhatsApp** pada nomor tersebut (bukan di Telegram).
-5. Balas OTP di Telegram → bot mengirim link `.../account/resetpassword?token=...`.
-6. Buka link lewat **SSH tunnel** dari laptop:
+3. Kirim username → bot meminta nomor WhatsApp.
+4. Ketik nomor (mis. `081234567890`) → OTP 6 digit datang di **WhatsApp** pada nomor itu, dan bot mengirim link
+   `.../account/resetpassword?token=...` (bukan OTP) di Telegram.
+5. Buka link lewat **SSH tunnel** dari laptop:
    ```bash
    ssh -L 5000:localhost:5000 user@server
    ```
    lalu buka link tadi di browser laptop (host `localhost:5000` sudah cocok).
+6. Masukkan OTP dari WhatsApp di halaman web → muncul form password baru.
 7. Isi password baru yang memenuhi kebijakan AD, kirim, dan pastikan halaman sukses muncul. Login dengan password baru.
 8. Buka link yang sama lagi → harus muncul "tidak valid atau kedaluwarsa".
-9. Ulangi dengan **voice note** ("tolong ganti password saya"). Tombol kontak tetap muncul sebagai teks, OTP datang di WhatsApp, dan link tetap dikirim sebagai teks.
+9. Ulangi dengan **voice note** ("tolong ganti password saya", lalu ucapkan atau ketik nomor). Link tetap dikirim sebagai teks.
 10. Uji negatif:
     - username yang tidak ada → bot minta kirim ulang;
-    - membagikan kontak **orang lain** (teruskan kontak) → ditolak, tidak ada WhatsApp terkirim;
-    - nomor yang berbeda dari nomor di AD (saat `RequireAdPhoneMatch=true`) → "tidak dapat diverifikasi", tidak ada WhatsApp;
-    - mengetik teks saat tombol kontak diminta → bot mengingatkan, tidak dilempar ke LLM;
-    - OTP salah 3 kali → OTP hangus.
+    - nomor tidak valid (mis. `abc`) → bot minta kirim ulang, tidak ada WhatsApp terkirim; 3 kali salah → dibatalkan;
+    - OTP salah 3 kali di halaman web → link tidak berlaku lagi;
+    - membuka link tanpa memasukkan OTP lalu mengirim POST password langsung → ditolak (OTP wajib dulu).
 11. Billing (nomor yang ada di `database.txt`) dan laporan jalan rusak masih jalan.
 
 ## 7. Selesai tes
@@ -265,5 +267,5 @@ setelah service di server berhenti.
 - `appsettings.json` di mesin dev berisi kredensial asli. Jangan ikut dikirim ke server; putar kredensial setelah tes.
 - Swagger aktif juga di Production (`Program.cs`). Selama Kestrel hanya `localhost`, ia hanya terbuka dari dalam server;
   jangan buka port 5000 ke jaringan tanpa mematikannya.
-- Endpoint `/api/WebHook/Receive` tidak punya autentikasi, dan halaman `/account/resetpassword` **tanpa token** masih
-  bisa mereset akun mana pun.
+- Endpoint `/api/WebHook/Receive` tidak punya autentikasi. Halaman `/account/resetpassword` kini hanya berfungsi dengan
+  token dari bot (tanpa token hanya menampilkan pesan link tidak valid).

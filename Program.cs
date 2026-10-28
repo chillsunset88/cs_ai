@@ -1,4 +1,4 @@
-using CS_AI.Services;
+﻿using CS_AI.Services;
 using Microsoft.Extensions.Options;
 using System.Net;
 using System.Net.Http.Headers;
@@ -51,6 +51,7 @@ builder.Services.AddSingleton<TTSService>();
 builder.Services.AddSingleton<STTService>();
 builder.Services.AddScoped<LDAPService>();
 builder.Services.AddSingleton<PasswordResetTokenService>();
+builder.Services.AddSingleton<DamcorpWhatsAppService>();
 //builder.Services.AddScoped<ActiveDirectoryService>();
 //builder.Services.Configure<ActiveDirectorySettings>(
 //    builder.Configuration.GetSection("ActiveDirectory"));
