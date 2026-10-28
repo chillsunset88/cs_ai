@@ -130,6 +130,7 @@ Ldap__Server=<FQDN domain controller, mis. dc01.corp.local>
 Ldap__Username=<akun layanan, mis. svc@corp.local>
 Ldap__Password=<password akun layanan>
 # Opsional: Ldap__Port=636  Ldap__UseSsl=true  Ldap__BindDomain=CORP  Ldap__BaseDn=OU=Karyawan,DC=corp,DC=local
+# Bila hanya port 389 yang terbuka: Ldap__Port=389  Ldap__UseSsl=false  Ldap__StartTls=true  (StartTLS, tetap terenkripsi)
 # Pengiriman OTP lewat WhatsApp API Damcorp -- WAJIB agar OTP terkirim:
 Damcorp__Username=<username API Damcorp>
 Damcorp__Password=<password API Damcorp>

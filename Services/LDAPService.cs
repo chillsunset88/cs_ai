@@ -35,6 +35,7 @@ namespace CS_AI.Services
         private readonly string _phoneAttribute;
         private readonly int _port;
         private readonly bool _useSsl;
+        private readonly bool _startTls;
 
         // defaultNamingContext dibaca sekali dari rootDSE bila Ldap:BaseDn tidak diisi.
         private static string? _discoveredBaseDn;
@@ -51,6 +52,8 @@ namespace CS_AI.Services
             _phoneAttribute = string.IsNullOrWhiteSpace(configuration["Ldap:PhoneAttribute"]) ? "mobile" : configuration["Ldap:PhoneAttribute"]!;
             _useSsl = configuration.GetValue<bool?>("Ldap:UseSsl") ?? true;
             _port = configuration.GetValue<int?>("Ldap:Port") ?? (_useSsl ? 636 : 389);
+            // StartTLS: koneksi dibuka di port 389 lalu ditingkatkan ke TLS, cukup untuk ganti password tanpa LDAPS.
+            _startTls = !_useSsl && (configuration.GetValue<bool?>("Ldap:StartTls") ?? false);
         }
 
         // Kredensial AD dibaca dari konfigurasi (Ldap:*), bukan hardcoded.
@@ -70,6 +73,17 @@ namespace CS_AI.Services
             };
             connection.SessionOptions.ProtocolVersion = 3;
             connection.SessionOptions.SecureSocketLayer = _useSsl;
+
+            try
+            {
+                if (_startTls)
+                    connection.SessionOptions.StartTransportLayerSecurity(null);
+            }
+            catch
+            {
+                connection.Dispose();
+                throw;
+            }
 
             try
             {
@@ -245,10 +259,10 @@ namespace CS_AI.Services
             if (user == null)
                 return false;
 
-            if (!_useSsl)
+            if (!_useSsl && !_startTls)
             {
                 // AD menolak perubahan unicodePwd di kanal tanpa enkripsi; gagal lebih awal dengan pesan jelas.
-                throw new InvalidOperationException("Ganti password di AD butuh LDAPS; setel Ldap:UseSsl=true");
+                throw new InvalidOperationException("Ganti password di AD butuh LDAPS; setel Ldap:UseSsl=true (port 636) atau Ldap:StartTls=true (port 389)");
             }
 
             // unicodePwd harus berupa string UTF-16LE yang dibungkus tanda kutip ganda.
