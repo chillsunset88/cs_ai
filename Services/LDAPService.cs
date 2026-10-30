@@ -87,10 +87,28 @@ namespace CS_AI.Services
 
             try
             {
+                // TEMP-DIAG: hapus setelah masalah bind selesai. Password tidak pernah dicatat.
+                _logger.LogWarning("TEMP-DIAG sebelum Bind: server={Server} port={Port} ssl={Ssl} starttls={StartTls} authType={AuthType} identity={Identity} passwordLength={PwLen}",
+                    _server, _port, _useSsl, _startTls, connection.AuthType, BindIdentity(), _password!.Length);
+
                 connection.Bind();
+
+                _logger.LogWarning("TEMP-DIAG setelah Bind: Bind() selesai tanpa exception");
+                try
+                {
+                    // WhoAmI (RFC 4532): kosong/"anonymous" berarti AD menganggap koneksi ini belum terautentikasi.
+                    var who = (ExtendedResponse)connection.SendRequest(new ExtendedRequest("1.3.6.1.4.1.4203.1.11.3"));
+                    _logger.LogWarning("TEMP-DIAG WhoAmI: '{Who}'",
+                        who.ResponseValue == null ? "" : Encoding.UTF8.GetString(who.ResponseValue));
+                }
+                catch (Exception whoEx)
+                {
+                    _logger.LogWarning("TEMP-DIAG WhoAmI gagal: {Type} {Message}", whoEx.GetType().Name, whoEx.Message);
+                }
             }
-            catch
+            catch (Exception bindEx)
             {
+                _logger.LogWarning("TEMP-DIAG Bind gagal: {Type} {Message}", bindEx.GetType().Name, bindEx.Message);
                 connection.Dispose();
                 throw;
             }
