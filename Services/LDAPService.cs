@@ -72,6 +72,9 @@ namespace CS_AI.Services
                 Timeout = TimeSpan.FromSeconds(15)
             };
             connection.SessionOptions.ProtocolVersion = 3;
+            // Pencarian subtree dari root domain bisa dijawab AD dengan referral. Bila diikuti, .NET membuka koneksi baru
+            // ke server lain tanpa kredensial, dan AD menolaknya (000004DC). Semua data yang dibutuhkan ada di DC ini.
+            connection.SessionOptions.ReferralChasing = ReferralChasingOptions.None;
             connection.SessionOptions.SecureSocketLayer = _useSsl;
 
             try
@@ -185,6 +188,11 @@ namespace CS_AI.Services
                 "sAMAccountName", "displayName", "distinguishedName", _phoneAttribute);
 
             var response = (SearchResponse)connection.SendRequest(request);
+
+            // TEMP-DIAG: hapus setelah masalah "user tidak ditemukan" selesai.
+            _logger.LogWarning("TEMP-DIAG FindUser: baseDn={BaseDn} username='{User}' length={Len} entries={Entries} references={Refs} resultCode={Result}",
+                request.DistinguishedName, username.Trim(), username.Trim().Length, response.Entries.Count, response.References.Count, response.ResultCode);
+
             if (response.Entries.Count == 0)
                 return null;
 
