@@ -696,6 +696,8 @@ namespace CS_AI.Services
 
             var baseUrl = (_configuration["PasswordReset:BaseUrl"] ?? "http://localhost:5000").TrimEnd('/');
             var link = $"{baseUrl}/account/resetpassword?token={token}";
+            if (!IsPublicHttpUrl(link))
+                _logger.LogWarning("PasswordReset:BaseUrl ({BaseUrl}) bukan alamat publik, link reset tidak bisa dibuka dari HP user. Isi PasswordReset__BaseUrl dengan alamat reverse proxy.", baseUrl);
 
             // Link selalu dikirim sebagai teks (tidak pernah dibacakan lewat suara).
             var linkText = $"Kode OTP dikirim ke WhatsApp {PhoneNumberHelper.Mask(phone)}. Buka link berikut, masukkan kode OTP, lalu buat password baru (berlaku {(int)_resetTokens.Lifetime.TotalMinutes} menit):\n{link}";

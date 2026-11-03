@@ -165,6 +165,54 @@ user memasukkan OTP → bila benar, user mengisi password baru dan backend menyi
 - Di mode `Development`, hanya akun dummy `telegram.demo` yang dianggap terdaftar; OTP tetap dikirim lewat Damcorp.
 - Konfigurasi lama `WhatsApp__*` (kirimi.id) hanya dipakai untuk notifikasi admin, bukan OTP.
 
+### 4b. Alamat publik untuk link reset (agar bisa dibuka dari HP)
+
+Aplikasi hanya mendengarkan `localhost:5000` (disengaja), jadi `PasswordReset__BaseUrl=http://localhost:5000` hanya cocok
+untuk SSH tunnel. Agar user bisa membuka link dari HP, pakai reverse proxy di server yang sama:
+
+1. **Siapkan nama domain** yang bisa dijangkau HP user dan mengarah ke server ini, mis. `reset.<domain-anda>`.
+   Bila HP user hanya terhubung lewat WiFi kantor atau VPN, DNS internal sudah cukup; bila lewat internet, butuh DNS publik
+   dan port 443 terbuka ke server. Gunakan sertifikat TLS yang berlaku dan dipercaya perangkat user.
+2. **Isi env** lalu restart (`sudo systemctl restart cs-ai`):
+   ```
+   PasswordReset__BaseUrl=https://reset.<domain-anda>
+   ```
+   Tanpa garis miring di akhir. Setelah itu bot juga menampilkan tombol "Buat password baru" (Telegram menolak tombol ke
+   localhost atau IP privat). Bila nilainya belum publik, log berisi peringatan `PasswordReset:BaseUrl ... bukan alamat publik`.
+3. **nginx**, `/etc/nginx/conf.d/cs-ai-reset.conf` (ganti nama domain dan path sertifikat):
+   ```nginx
+   limit_req_zone $binary_remote_addr zone=reset:10m rate=5r/s;
+
+   server {
+       listen 443 ssl;
+       server_name reset.<domain-anda>;
+       ssl_certificate     /etc/ssl/<domain-anda>/fullchain.pem;
+       ssl_certificate_key /etc/ssl/<domain-anda>/privkey.pem;
+
+       # Hanya halaman reset yang diteruskan. Jangan teruskan seluruh aplikasi: Swagger dan
+       # /api/WebHook/Receive tidak memakai autentikasi.
+       location ~ ^/account/(resetpassword|verifyotp|resetsuccess)$ {
+           limit_req zone=reset burst=10 nodelay;
+           proxy_pass http://127.0.0.1:5000;
+           proxy_set_header Host $host;
+           proxy_set_header X-Forwarded-Proto $scheme;
+       }
+
+       location / { return 404; }
+   }
+
+   server {
+       listen 80;
+       server_name reset.<domain-anda>;
+       return 301 https://$host$request_uri;
+   }
+   ```
+   Lalu `sudo nginx -t && sudo systemctl reload nginx`.
+4. **Uji dari HP** (bukan dari server): buka `https://reset.<domain-anda>/account/resetpassword?token=x`. Harus muncul halaman
+   "Link tidak dapat digunakan" (token palsu). Itu membuktikan domain, TLS, dan proxy bekerja.
+
+Link berisi token sekali pakai dan OTP tetap wajib; meski begitu, jangan teruskan path lain ke internet.
+
 ## 5. Jalankan
 
 **Uji di foreground dulu** (hentikan dengan Ctrl+C):
