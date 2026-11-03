@@ -83,7 +83,13 @@ namespace CS_AI.Services
                 }
 
                 if ((int)status is >= 200 and < 300 && HasMessageId(body))
+                {
+                    // TEMP-DIAG: hapus setelah pengiriman OTP terverifikasi. Respons sukses tidak memuat OTP.
+                    _logger.LogWarning("TEMP-DIAG Damcorp diterima: mode={Mode} HTTP {Status} {Body}",
+                        string.IsNullOrWhiteSpace(templateName) ? "text" : "template:" + templateName,
+                        (int)status, Truncate(body));
                     return true;
+                }
 
                 // Isi respons error dari Damcorp berisi alasan penolakan (mis. template belum disetujui); OTP tidak ikut.
                 _logger.LogWarning("Damcorp menolak pengiriman OTP ke {Phone}: HTTP {Status} {Body}",
