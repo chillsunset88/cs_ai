@@ -37,7 +37,6 @@ namespace CS_AI.Controllers
 
             ViewBag.Token = token;
             ViewBag.Username = tokenUser;
-            ViewBag.Step = _resetTokens.IsVerified(token) ? "password" : "otp";
             return View();
         }
 
@@ -86,47 +85,6 @@ namespace CS_AI.Controllers
         //    return View();
         //}
         [HttpPost]
-        public IActionResult VerifyOtp(string? Token, string? Otp)
-        {
-            NoStore();
-
-            if (string.IsNullOrEmpty(Token) || !_resetTokens.TryGetUsername(Token, out var username))
-            {
-                ViewBag.TokenInvalid = true;
-                return View("ResetPassword");
-            }
-
-            ViewBag.Token = Token;
-            ViewBag.Username = username;
-
-            switch (_resetTokens.VerifyOtp(Token, Otp))
-            {
-                case OtpResult.Ok:
-                    ViewBag.Step = "password";
-                    return View("ResetPassword");
-
-                case OtpResult.Invalid:
-                    ViewBag.Message = "Kode OTP salah. Periksa kode di WhatsApp Anda lalu coba lagi.";
-                    break;
-
-                case OtpResult.Locked:
-                    // Terlalu banyak percobaan: sesi dibuang, user harus meminta reset ulang lewat bot.
-                    _resetTokens.Consume(Token);
-                    ViewBag.TokenInvalid = true;
-                    return View("ResetPassword");
-
-                default:
-                    _resetTokens.Consume(Token);
-                    ViewBag.TokenInvalid = true;
-                    return View("ResetPassword");
-            }
-
-            ViewBag.Step = "otp";
-            ViewBag.Success = false;
-            return View("ResetPassword");
-        }
-
-        [HttpPost]
         public async Task<IActionResult> ResetPassword(string? Password, string? ConfirmPassword, string? Token)
         {
             NoStore();
@@ -151,16 +109,6 @@ namespace CS_AI.Controllers
 
             ViewBag.Token = token;
             ViewBag.Username = username;
-
-            if (!_resetTokens.IsVerified(token))
-            {
-                ViewBag.Step = "otp";
-                ViewBag.Message = "Masukkan kode OTP terlebih dahulu.";
-                ViewBag.Success = false;
-                return View();
-            }
-
-            ViewBag.Step = "password";
 
             if (string.IsNullOrEmpty(password))
             {

@@ -5,8 +5,8 @@ Menggantikan runbook lama berbasis Windows/RDC (`RUNBOOK-PRODUCTION-RDC.id.md`, 
 Untuk tes tanpa AD (hanya akun dummy `telegram.demo`), setel `ASPNETCORE_ENVIRONMENT=Development`.
 
 > **Peringatan.** Tes dengan username asli mereset password AD sungguhan. Pakai akun uji milik sendiri.
-> OTP dikirim lewat **WhatsApp API Damcorp** ke nomor yang diketik user di Telegram, dan OTP dimasukkan di halaman web
-> reset password (bukan di Telegram). Untuk tahap tes, nomor boleh berbeda dari nomor yang tercatat di AD; backend hanya
+> OTP dikirim lewat **WhatsApp API Damcorp** ke nomor yang diketik user di Telegram. User menyalin OTP dari WhatsApp
+> dan membalasnya di **Telegram**; bila benar, bot mengirim link halaman web untuk membuat password baru. Untuk tahap tes, nomor boleh berbeda dari nomor yang tercatat di AD; backend hanya
 > memeriksa username terdaftar dan format nomor. Lihat bagian 4a.
 
 ## 0. Akses Active Directory dari Linux (LDAPS)
@@ -148,8 +148,9 @@ Kunci lain (WhatsApp, `Telegram__MaxConcurrentUpdates`, dst.) mengikuti `appsett
 ### 4a. OTP lewat WhatsApp API Damcorp
 
 Alur: user mengirim username → backend memeriksa username terdaftar → bot meminta **nomor WhatsApp** (diketik) → backend
-memeriksa format nomor, membuat OTP, mengirimnya lewat Damcorp, lalu bot mengirim **link halaman web** → di halaman itu
-user memasukkan OTP → bila benar, user mengisi password baru dan backend menyimpannya ke AD.
+memeriksa format nomor, membuat OTP, dan mengirimnya lewat Damcorp → user menyalin OTP dari WhatsApp dan **membalasnya di
+Telegram** → bila benar, bot mengirim **link halaman web** → di halaman itu user mengisi password baru dan backend
+menyimpannya ke AD.
 
 - Kredensial API (`Damcorp__Username`, `Damcorp__Password`) hanya dibaca dari environment. Aplikasi login ke
   `POST {BaseUrl}/v2/users/login` (Basic Auth), menyimpan token sampai `expires_after`, dan login ulang otomatis bila
@@ -160,8 +161,8 @@ user memasukkan OTP → bila benar, user mengisi password baru dan backend menyi
   mengantarkan teks bebas ke nomor yang membalas pesan bisnis dalam 24 jam terakhir. Untuk nomor yang belum pernah
   chat dengan nomor bisnis, minta Damcorp menyetujui **template autentikasi** (OTP sebagai parameter body dan tombol
   URL), lalu isi `Damcorp__OtpTemplateName` dan `Damcorp__TemplateLanguage`.
-- OTP berlaku `PasswordReset__OtpMinutes` (default 5) dan hanya boleh dicoba 3 kali di halaman web. Link berlaku
-  `PasswordReset__TokenMinutes` (default 10) dan sekali pakai.
+- OTP berlaku `PasswordReset__OtpMinutes` (default 5) dan hanya boleh dicoba 3 kali di Telegram. Link dikirim setelah
+  OTP benar, berlaku `PasswordReset__TokenMinutes` (default 10) dan sekali pakai.
 - Di mode `Development`, hanya akun dummy `telegram.demo` yang dianggap terdaftar; OTP tetap dikirim lewat Damcorp.
 - Konfigurasi lama `WhatsApp__*` (kirimi.id) hanya dipakai untuk notifikasi admin, bukan OTP.
 
@@ -211,7 +212,7 @@ untuk SSH tunnel. Agar user bisa membuka link dari HP, pakai reverse proxy di se
 4. **Uji dari HP** (bukan dari server): buka `https://reset.<domain-anda>/account/resetpassword?token=x`. Harus muncul halaman
    "Link tidak dapat digunakan" (token palsu). Itu membuktikan domain, TLS, dan proxy bekerja.
 
-Link berisi token sekali pakai dan OTP tetap wajib; meski begitu, jangan teruskan path lain ke internet.
+Link berisi token sekali pakai yang baru dibuat setelah OTP benar di Telegram; meski begitu, jangan teruskan path lain ke internet.
 
 ## 5. Jalankan
 
@@ -263,22 +264,17 @@ Dengan akun uji (opsi C: `telegram.demo`):
 1. `/start` dan `/time` dijawab bot.
 2. Kirim teks "ganti password saya" → bot meminta username.
 3. Kirim username → bot meminta nomor WhatsApp.
-4. Ketik nomor (mis. `081234567890`) → OTP 6 digit datang di **WhatsApp** pada nomor itu, dan bot mengirim link
-   `.../account/resetpassword?token=...` (bukan OTP) di Telegram.
-5. Buka link lewat **SSH tunnel** dari laptop:
-   ```bash
-   ssh -L 5000:localhost:5000 user@server
-   ```
-   lalu buka link tadi di browser laptop (host `localhost:5000` sudah cocok).
-6. Masukkan OTP dari WhatsApp di halaman web → muncul form password baru.
+4. Ketik nomor (mis. `081234567890`) → OTP 6 digit datang di **WhatsApp** pada nomor itu, dan bot meminta OTP.
+5. Salin OTP dari WhatsApp dan **balas di Telegram** → bot mengirim link `.../account/resetpassword?token=...`.
+6. Buka link (lewat SSH tunnel atau alamat proxy, lihat 4b dan bagian 6 ssh) → halaman langsung meminta password baru.
 7. Isi password baru yang memenuhi kebijakan AD, kirim, dan pastikan halaman sukses muncul. Login dengan password baru.
 8. Buka link yang sama lagi → harus muncul "tidak valid atau kedaluwarsa".
-9. Ulangi dengan **voice note** ("tolong ganti password saya", lalu ucapkan atau ketik nomor). Link tetap dikirim sebagai teks.
+9. Ulangi dengan **voice note** ("tolong ganti password saya", lalu ucapkan atau ketik nomor, lalu ucapkan OTP). Link tetap dikirim sebagai teks.
 10. Uji negatif:
     - username yang tidak ada → bot minta kirim ulang;
     - nomor tidak valid (mis. `abc`) → bot minta kirim ulang, tidak ada WhatsApp terkirim; 3 kali salah → dibatalkan;
-    - OTP salah 3 kali di halaman web → link tidak berlaku lagi;
-    - membuka link tanpa memasukkan OTP lalu mengirim POST password langsung → ditolak (OTP wajib dulu).
+    - OTP salah → bot minta kirim ulang OTP; setelah 3 kali salah, OTP tidak berlaku lagi;
+    - membuka halaman reset tanpa token → "tidak valid".
 11. Billing (nomor yang ada di `database.txt`) dan laporan jalan rusak masih jalan.
 
 ## 7. Selesai tes

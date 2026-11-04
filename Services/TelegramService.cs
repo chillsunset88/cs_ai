@@ -27,6 +27,7 @@ namespace CS_AI.Services
         private readonly STTService _stt;
         private readonly TTSService _tts;
         private readonly IServiceScopeFactory _scopeFactory;
+        private readonly ConcurrentDictionary<long, PasswordResetState> _passwordResets = new();
         // Chat yang sudah memberi username dan sedang diminta mengetik nomor WhatsApp untuk menerima OTP.
         private readonly ConcurrentDictionary<long, PhoneRequestState> _awaitingPhone = new();
         private readonly Dictionary<long, ChatQueue> _chatQueues = new();
@@ -111,8 +112,17 @@ namespace CS_AI.Services
                                         "   action=\"ask_username\"\r\n" +
                                         "   message=\"Username tidak ditemukan. Mohon kirim ulang username Anda.\"\r\n" +
                                         "4. Jika menerima system=otp_sent:\r\n" +
+                                        "   action=\"ask_otp\"\r\n" +
+                                        "   message=\"Kode OTP sudah kami kirim ke WhatsApp Anda. Silakan balas dengan kode OTP tersebut.\"\r\n" +
+                                        "5. Jika menerima system=otp_invalid:\r\n" +
+                                        "   action=\"ask_otp\"\r\n" +
+                                        "   message=\"Kode OTP tidak valid. Silakan kirim ulang kode OTP Anda.\"\r\n" +
+                                        "6. Jika menerima system=otp_expired:\r\n" +
+                                        "   action=\"ask_username\"\r\n" +
+                                        "   message=\"Kode OTP sudah tidak berlaku. Mohon kirim ulang username Anda.\"\r\n" +
+                                        "7. Jika menerima system=otp_verified:\r\n" +
                                         "   action=\"done\"\r\n" +
-                                        "   message=\"Kode OTP sudah kami kirim ke WhatsApp Anda. Silakan buka link yang kami kirim, masukkan kode OTP di halaman tersebut, lalu buat password baru.\"\r\n\r\n" +
+                                        "   message=\"Kode OTP benar. Silakan buka link yang kami kirim untuk membuat password baru.\"\r\n\r\n" +
 
                                         "====================\r\n" +
                                         "FALLBACK\r\n" +
@@ -303,6 +313,7 @@ namespace CS_AI.Services
                     break;
                 case "/reset":
                     _aiService.ClearSession(chatId.ToString());
+                    _passwordResets.TryRemove(chatId, out _);
                     _awaitingPhone.TryRemove(chatId, out _);
                     break;
 
@@ -564,6 +575,14 @@ namespace CS_AI.Services
                     return;
                 }
 
+                // Dari suara, OTP bisa terbaca "123 456" atau "kode saya 123456."; ambil digitnya saja.
+                var otpCandidate = viaVoice ? Regex.Replace(input, @"\D", "") : input;
+                if (_passwordResets.TryGetValue(chatId, out var pending) && Regex.IsMatch(otpCandidate, @"^\d{6}$"))
+                {
+                    await VerifyPasswordOtpAsync(botClient, chatId, pending, otpCandidate, cancellationToken, viaVoice);
+                    return;
+                }
+
                 var reply = await AskTextAsync(chatId, $"message={input}\ndatetime = {DateTime.Now}", cancellationToken);
 
                 switch (reply.Action)
@@ -651,8 +670,8 @@ namespace CS_AI.Services
         }
 
         // Backend hanya memastikan username terdaftar (sudah dicek sebelumnya) dan nomor berformat valid; nomor boleh
-        // berbeda dari yang tercatat. OTP dibuat di sini, dikirim lewat WhatsApp API Damcorp, lalu link halaman web
-        // dikirim ke user. OTP sendiri dimasukkan user di halaman web, bukan di Telegram.
+        // berbeda dari yang tercatat. OTP dibuat di sini dan dikirim lewat WhatsApp API Damcorp; user menyalin OTP itu
+        // dan membalasnya di Telegram. Link halaman web baru dikirim setelah OTP benar.
         private async Task HandlePhoneAsync(ITelegramBotClient botClient, long chatId, string input, PhoneRequestState request, CancellationToken cancellationToken, bool viaVoice)
         {
             var countryCode = _configuration["PasswordReset:DefaultCountryCode"] ?? "62";
@@ -679,11 +698,9 @@ namespace CS_AI.Services
             _awaitingPhone.TryRemove(chatId, out _);
 
             var otp = GenerateOTP();
-            var token = _resetTokens.Create(request.Username, otp);
 
             if (!await _whatsApp.SendOtpAsync(phone, otp, cancellationToken))
             {
-                _resetTokens.Consume(token);
                 _aiService.ClearSession(chatId.ToString());
                 await botClient.SendMessage(chatId,
                     "Maaf, kode OTP gagal dikirim ke WhatsApp. Pastikan nomor tersebut aktif di WhatsApp, lalu coba lagi.",
@@ -691,16 +708,41 @@ namespace CS_AI.Services
                 return;
             }
 
-            _logger.LogWarning("Password reset link issued for AD user {Username} via Telegram chat {ChatId}, OTP dikirim ke {Phone}",
-                request.Username, chatId, PhoneNumberHelper.Mask(phone));
+            var otpMinutes = Math.Max(1, _configuration.GetValue<int?>("PasswordReset:OtpMinutes") ?? 5);
+            _passwordResets[chatId] = new PasswordResetState(request.Username, otp, DateTime.UtcNow.AddMinutes(otpMinutes));
+            _logger.LogInformation("OTP reset password dikirim via WhatsApp ke {Phone} untuk chat {ChatId}", PhoneNumberHelper.Mask(phone), chatId);
+            await ContinuePasswordFlowAsync(botClient, chatId, "system=otp_sent", cancellationToken, viaVoice);
+        }
 
+        private async Task VerifyPasswordOtpAsync(ITelegramBotClient botClient, long chatId, PasswordResetState pending, string otp, CancellationToken cancellationToken, bool viaVoice = false)
+        {
+            if (pending.ExpiresAt < DateTime.UtcNow || pending.Attempts >= 3)
+            {
+                _passwordResets.TryRemove(chatId, out _);
+                await ContinuePasswordFlowAsync(botClient, chatId, "system=otp_expired", cancellationToken, viaVoice);
+                return;
+            }
+
+            if (otp != pending.Otp)
+            {
+                pending.Attempts++;
+                await ContinuePasswordFlowAsync(botClient, chatId, "system=otp_invalid", cancellationToken, viaVoice);
+                return;
+            }
+
+            _passwordResets.TryRemove(chatId, out _);
+
+            // Password baru dibuat user sendiri lewat halaman web; token terikat ke username yang OTP-nya sudah benar.
+            var token = _resetTokens.Create(pending.Username);
             var baseUrl = (_configuration["PasswordReset:BaseUrl"] ?? "http://localhost:5000").TrimEnd('/');
             var link = $"{baseUrl}/account/resetpassword?token={token}";
             if (!IsPublicHttpUrl(link))
                 _logger.LogWarning("PasswordReset:BaseUrl ({BaseUrl}) bukan alamat publik, link reset tidak bisa dibuka dari HP user. Isi PasswordReset__BaseUrl dengan alamat reverse proxy.", baseUrl);
 
+            _logger.LogWarning("Password reset link issued for AD user {Username} via Telegram chat {ChatId}", pending.Username, chatId);
+
             // Link selalu dikirim sebagai teks (tidak pernah dibacakan lewat suara).
-            var linkText = $"Kode OTP dikirim ke WhatsApp {PhoneNumberHelper.Mask(phone)}. Buka link berikut, masukkan kode OTP, lalu buat password baru (berlaku {(int)_resetTokens.Lifetime.TotalMinutes} menit):\n{link}";
+            var linkText = $"Buka link berikut untuk membuat password baru (sekali pakai, berlaku {(int)_resetTokens.Lifetime.TotalMinutes} menit):\n{link}";
             try
             {
                 // Telegram menolak tombol URL ke localhost/IP privat, jadi tombol hanya dipakai bila alamatnya publik.
@@ -714,7 +756,7 @@ namespace CS_AI.Services
                 await botClient.SendMessage(chatId, linkText, cancellationToken: cancellationToken);
             }
 
-            await ContinuePasswordFlowAsync(botClient, chatId, "system=otp_sent", cancellationToken, viaVoice);
+            await ContinuePasswordFlowAsync(botClient, chatId, "system=otp_verified", cancellationToken, viaVoice);
         }
 
         private static bool IsPublicHttpUrl(string url)
@@ -842,6 +884,21 @@ namespace CS_AI.Services
         {
             public Task Tail { get; set; } = Task.CompletedTask;
             public int Pending { get; set; }
+        }
+
+        private sealed class PasswordResetState
+        {
+            public PasswordResetState(string username, string otp, DateTime expiresAt)
+            {
+                Username = username;
+                Otp = otp;
+                ExpiresAt = expiresAt;
+            }
+
+            public string Username { get; }
+            public string Otp { get; }
+            public DateTime ExpiresAt { get; }
+            public int Attempts { get; set; }
         }
 
         private sealed class PhoneRequestState
