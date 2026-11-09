@@ -3,6 +3,7 @@ appsettings.json
 appsettings.Production.json
 appsettings.Local.json
 fortinet.txt
+cs-ai.env
 
 # Hasil build / cache IDE (selalu bisa dibuat ulang)
 bin/

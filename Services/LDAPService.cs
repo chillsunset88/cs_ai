@@ -67,7 +67,7 @@ namespace CS_AI.Services
 
             var connection = new LdapConnection(new LdapDirectoryIdentifier(_server, _port))
             {
-                AuthType = AuthType.Basic,
+                AuthType = AuthType.Negotiate,
                 Credential = new NetworkCredential(BindIdentity(), _password),
                 Timeout = TimeSpan.FromSeconds(15)
             };
@@ -75,7 +75,9 @@ namespace CS_AI.Services
             // Pencarian subtree dari root domain bisa dijawab AD dengan referral. Bila diikuti, .NET membuka koneksi baru
             // ke server lain tanpa kredensial, dan AD menolaknya (000004DC). Semua data yang dibutuhkan ada di DC ini.
             connection.SessionOptions.ReferralChasing = ReferralChasingOptions.None;
-            connection.SessionOptions.SecureSocketLayer = _useSsl;
+            connection.SessionOptions.Signing = true;
+            connection.SessionOptions.Sealing = true;
+            connection.SessionOptions.SecureSocketLayer = false;
 
             try
             {
@@ -91,12 +93,17 @@ namespace CS_AI.Services
             try
             {
                 // TEMP-DIAG: hapus setelah masalah bind selesai. Password tidak pernah dicatat.
-                _logger.LogWarning("TEMP-DIAG sebelum Bind: server={Server} port={Port} ssl={Ssl} starttls={StartTls} authType={AuthType} identity={Identity} passwordLength={PwLen}",
+                _logger.LogInformation("TEMP-DIAG sebelum Bind: server={Server} port={Port} ssl={Ssl} starttls={StartTls} authType={AuthType} identity={Identity} passwordLength={PwLen}",
                     _server, _port, _useSsl, _startTls, connection.AuthType, BindIdentity(), _password!.Length);
 
                 connection.Bind();
 
                 _logger.LogWarning("TEMP-DIAG setelah Bind: Bind() selesai tanpa exception");
+
+                _logger.LogInformation(
+                    "LDAP CONFIG: Server={Server}, Port={Port}, UseSsl={UseSsl}, StartTls={StartTls}",
+                    _server, _port, _useSsl, _startTls
+                );
                 try
                 {
                     // WhoAmI (RFC 4532): kosong/"anonymous" berarti AD menganggap koneksi ini belum terautentikasi.

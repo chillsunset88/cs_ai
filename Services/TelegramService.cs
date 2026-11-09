@@ -625,6 +625,12 @@ namespace CS_AI.Services
 
         private async Task StartPasswordResetAsync(ITelegramBotClient botClient, long chatId, string username, CancellationToken cancellationToken, bool viaVoice = false)
         {
+
+            _logger.LogInformation(
+                "PasswordReset: Starting reset process for username {Username}, ChatId {ChatId}",
+                username, chatId
+            );
+
             var found = !string.IsNullOrWhiteSpace(username) && await Task.Run(() =>
             {
                 using var scope = _scopeFactory.CreateScope();
@@ -734,7 +740,7 @@ namespace CS_AI.Services
 
             // Password baru dibuat user sendiri lewat halaman web; token terikat ke username yang OTP-nya sudah benar.
             var token = _resetTokens.Create(pending.Username);
-            var baseUrl = (_configuration["PasswordReset:BaseUrl"] ?? "http://localhost:5000").TrimEnd('/');
+            var baseUrl = (_configuration["PasswordReset:BaseUrl"] ?? "http://localhost:8000").TrimEnd('/');
             var link = $"{baseUrl}/account/resetpassword?token={token}";
             if (!IsPublicHttpUrl(link))
                 _logger.LogWarning("PasswordReset:BaseUrl ({BaseUrl}) bukan alamat publik, link reset tidak bisa dibuka dari HP user. Isi PasswordReset__BaseUrl dengan alamat reverse proxy.", baseUrl);
